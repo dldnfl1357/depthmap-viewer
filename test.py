@@ -10,6 +10,9 @@ import glob
 import time
 import numpy as np
 import cv2
+import fnmatch
+import tkinter as tk
+from tkinter import filedialog
 
 # -----------------------------
 # 상수 및 타입 정의
@@ -145,7 +148,11 @@ def projector_phase_image(xml_path):
     fs = cv2.FileStorage(str(xml_path), cv2.FILE_STORAGE_READ)
     coeff = fs.getNode("Linear_coefficients").mat().astype(FP_PREC)
     fs.release()
-    return UnwrappedProjectorPhase(coeff[0,0], coeff[0,1])
+    flat = coeff.flatten()
+    if flat.size < 2:
+        raise RuntimeError(f"Linear_coefficients has unexpected size: {coeff.shape}")
+    a, b = flat[0], flat[1]
+    return UnwrappedProjectorPhase(a, b)
 
 def to_focal_plane(intrin, x, y):
     """C++ To_focal_plane"""
@@ -223,9 +230,26 @@ def save_point_cloud(path, depth_map, calib):
 # -----------------------------
 # 메인 테스트 파이프라인
 # -----------------------------
-def main(test_dir):
-    in_dir = os.path.join(test_dir, "[test]_input.d")
-    out_dir = os.path.join(test_dir, "[test]_output.d")
+import os
+import fnmatch
+
+def find_input_folder(root_dir):
+    # 선택된 폴더 자체가 *_input.d라면 바로 사용
+    if root_dir.endswith("_input.d") and os.path.isdir(root_dir):
+        return root_dir
+
+    # 하위 폴더 중 *_input.d를 찾아서 리턴
+    for name in os.listdir(root_dir):
+        if name.endswith("_input.d"):
+            cand = os.path.join(root_dir, name)
+            if os.path.isdir(cand):
+                return cand
+
+    raise RuntimeError(f"No '*_input.d' folder under {root_dir}")
+
+def main(input_dir, output_dir):
+    in_dir  = find_input_folder(input_dir)
+    out_dir = output_dir
     os.makedirs(out_dir, exist_ok=True)
 
     calib = calibration_data_from_file(os.path.join(in_dir,"calib_param.xml"))
@@ -264,23 +288,29 @@ def main(test_dir):
     cv2.imwrite(os.path.join(out_dir,"depthmap.bmp"), (depth/depth.max()*255).astype(np.uint8))
     print("Done!")
 
-if __name__=="__main__":
-    if len(sys.argv) < 2:
-        print("Usage: python depthmap.py <input_folder>")
-        sys.exit(1)
+def choose_input_directory():
+    root = tk.Tk()
+    root.withdraw()  # 메인 윈도우 숨기기
+    folder = filedialog.askdirectory(title="Select Input Folder")
+    root.destroy()
+    return folder
 
-    input_dir = sys.argv[1]
-    # input_dir: e.g. /path/to/[test]_input.d
+if __name__ == "__main__":
+    # 1) 다이얼로그로 입력 폴더 선택
+    input_dir = choose_input_directory()
+    if not input_dir:
+        print("폴더를 선택하지 않아 종료합니다.")
+        sys.exit(0)
+
+    # 2) output_dir 자동 생성 (input과 같은 레벨)
     parent = os.path.dirname(input_dir)
     base   = os.path.basename(input_dir)
-
-    # "[test]_input.d" → "[test]_output.d"
     if base.endswith("_input.d"):
         out_name = base.replace("_input.d", "_output.d")
     else:
         out_name = base + "_output"
-
     output_dir = os.path.join(parent, out_name)
     os.makedirs(output_dir, exist_ok=True)
 
+    # 3) 파이프라인 실행
     main(input_dir, output_dir)
